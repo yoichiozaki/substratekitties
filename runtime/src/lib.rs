@@ -175,7 +175,9 @@ impl sudo::Trait for Runtime {
 }
 
 // Implementation of substratekitties module
-impl substratekitties::Trait for Runtime {} // empty
+impl substratekitties::Trait for Runtime {
+	type Event = Event;
+}
 
 construct_runtime!(
 	pub enum Runtime with Log(InternalLog: DigestItem<Hash, Ed25519AuthorityId>) where
@@ -192,7 +194,7 @@ construct_runtime!(
 		Sudo: sudo,
 
         // Add my first substratekitties module.
-        Substratekitties: substratekitties::{Module, Call, Storage},
+        Substratekitties: substratekitties::{Module, Call, Storage, Event<T>},
 	}
 );
 

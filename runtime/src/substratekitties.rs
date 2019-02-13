@@ -1,6 +1,6 @@
 use parity_codec::Encode;
 use system::ensure_signed;
-use support::{decl_storage, decl_module, StorageValue, StorageMap, dispatch::Result, ensure};
+use support::{decl_storage, decl_module, StorageValue, StorageMap, dispatch::Result, ensure, decl_event};
 use runtime_primitives::traits::{As, Hash};
 
 #[derive(Encode, Decode, Default, Clone, PartialEq)]
@@ -11,7 +11,21 @@ pub struct Kitty<Hash, Balance> {
     gen: u64,
 }
 
-pub trait Trait: balances::Trait {}
+// Substrateでは「あるトランザクショううがFinalizeされたことが、すなわちそのトランザクションによって実行される
+// 関数が成功裏に終わったことを意味しない」。Substrateでは「呼び出された関数が成功裏に終わったこと」を
+// Eventというものを明示的に返すことで表現する。Eventには任意の型を与えることができる。
+// Eventの役割は「その関数の実行の成否を報告すること」と
+// 「Off-chainの世界に、ブロックチェーン上で状態遷移が発生したことを宣言すること」である。
+// Eventの定義にはdecl_eventマクロを使うと簡単にできるようになっている。
+pub trait Trait: balances::Trait {
+    type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
+}
+
+decl_event!(
+    pub enum Event<T> where <T as system::Trait>::AccountId, <T as system::Trait>::Hash {
+        Created(AccountId, Hash),
+    }
+);
 
 // decl_strorageマクロの適用
 decl_storage! {
@@ -28,6 +42,9 @@ decl_storage! {
 decl_module! {
     pub struct Module<T: Trait> for enum Call where origin: T::Origin {
         // Declare public functions here.
+
+        // トランザクションの執行後にイベントを吐く関数をデフォルトの挙動で定義する。
+        fn deposit_event<T>() = default;
 
         // 新しいKittyを生成し、その成否を返す関数を定義する。
         fn create_kitty(origin) -> Result {
@@ -66,6 +83,9 @@ decl_module! {
             <Nonce<T>>::mutate(|n| {
                 *n += 1
             });
+
+            // トランザクション執行後のイベントを吐く。
+            Self::deposit_event(RawEvent::Created(sender, random_hash));
 
             Ok(())
         }
