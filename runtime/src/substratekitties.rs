@@ -5,6 +5,7 @@ pub trait Trait: system::Trait {}
 decl_storage! {
     trait Store for Module<T: Trait> as KittyStorage {
         // Declare storage abd getter functions here.
+        Value: u64;
     }
 }
 
