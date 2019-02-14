@@ -1,7 +1,7 @@
 use parity_codec::Encode;
 use system::ensure_signed;
 use support::{decl_storage, decl_module, StorageValue, StorageMap, dispatch::Result, ensure, decl_event};
-use runtime_primitives::traits::{As, Hash};
+use runtime_primitives::traits::{As, Hash, Zero};
 
 // Substrateでは「あるトランザクションがFinalizeされたことが、直接そのトランザクションによって実行される
 // 関数が成功裏に終わったこと」を意味しない。Substrateでは「呼び出された関数が成功裏に終わったこと」を
@@ -48,9 +48,10 @@ decl_event!(
               <T as system::Trait>::Hash,
               <T as balances::Trait>::Balance
     {
-        Created(AccountId, Hash),
-        PriceSet(AccountId, Hash, Balance),
-        Transferred(AccountId, AccountId, Hash),
+        Created(AccountId, Hash),                // `AccountId`が`Hash`で指し示されるkittyをcreateした。
+        PriceSet(AccountId, Hash, Balance),      // `AccountId`が`Hash`で指し示されるkittyのpriceを`Balance`に設定した。
+        Transferred(AccountId, AccountId, Hash), // `AccountId`が`AccountId`に`Hash`で指し示されるkittyをtransferした。
+        Bought(AccountId, AccountId, Hash, Balance),   // `AccountId`が`AccountId`から`Hash`で指し示されるkittyを`Balance`buyした。
     }
 );
 
@@ -127,7 +128,7 @@ decl_module! {
             let sender = ensure_signed(origin)?;
 
             // Verify first, write lastの原則：指定したkittyが存在することを確認する。
-            ensure!(<Kitties<T>>::exists(kitty_id), "Error: this cat does not exist");
+            ensure!(<Kitties<T>>::exists(kitty_id), "Error: invalid kitty id: this kitty does not exist");
 
             // Verify first, write lastの原則：本当にそのkittyはあなたのもの？
             let owner = Self::owner_of(kitty_id).ok_or("Error: there is no owner for this kitty")?; // そもそも所有者のいないkittyだった。
@@ -156,6 +157,46 @@ decl_module! {
 
             // 転送をする。
             Self::_transfer_from(sender, to, kitty_id)?;
+
+            Ok(())
+        }
+
+        // 呼び出し側が買いたいkittyのIDと買取額を引数に与えて、購入を実行し、その成否を返す関数を定義する。
+        fn buy_kitty(origin, kitty_id: T::Hash, max_price: T::Balance) -> Result {
+
+            // Verify first, write lastの原則：正当なユーザーがこの関数を叩いたかを確認する。
+            let sender = ensure_signed(origin)?;
+
+            // Verify first, write lastの原則：買いたいkittyが存在することを確認する。
+            ensure!(<Kitties<T>>::exists(kitty_id), "Error: invalid kitty id: this kitty does not exist");
+
+            // Verify first, write lastの原則：kittyの所有者が正当であることを確認する。
+            let owner = Self::owner_of(kitty_id).ok_or("Error: there is no owner for this kitty")?;
+            ensure!(owner != sender, "Error: you can not buy your own kitty");
+
+            // 売買されるkittyを引き出す。
+            let mut kitty = Self::kitty(kitty_id);
+            // 売却額を確認する。
+            let kitty_price = kitty.price;
+
+            // 売却額 == 0のkittyは売却対象ではないものとする。
+            ensure!(!kitty_price.is_zero(), "Error: this kitty you want to buy is not for sale");
+
+            // 買取側の口座残高が売却額以下でないと買えないので確認する。
+            ensure!(kitty_price <= max_price, "Error: this kitty you want to buy costs more than your max price");
+
+            // 双方の残高をアトミックに更新する。
+            <balances::Module<T>>::make_transfer(&sender, &owner, kitty_price)?;
+
+            // kittyを売却側から購入側へ転送する。
+            Self::_transfer_from(owner.clone(), sender.clone(), kitty_id)?;
+
+            kitty.price = <T::Balance as As<u64>>::sa(0);
+
+            <Kitties<T>>::insert(kitty_id, kitty);
+
+            // Boughtイベントを吐く。
+            Self::deposit_event(RawEvent::Bought(sender, owner, kitty_id, kitty_price));
 
             Ok(())
         }
