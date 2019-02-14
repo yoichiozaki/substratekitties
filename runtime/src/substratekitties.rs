@@ -24,6 +24,9 @@ use runtime_primitives::traits::{As, Hash};
 // mapによるリストのエミュレートだと「アカウントとkittyが一対一対応」する必要があるので、複数のkittiesを一人が
 // 所有することができない。この問題はタプルを使うことで解決させることができる。
 
+// 「データをブロックチェーンから引き出して、更新する」という操作はverify first, write lastの原則を
+// 適用することが求められる。
+
 pub trait Trait: balances::Trait {
     type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 }
@@ -37,8 +40,13 @@ pub struct Kitty<Hash, Balance> {
 }
 
 decl_event!(
-    pub enum Event<T> where <T as system::Trait>::AccountId, <T as system::Trait>::Hash {
+    pub enum Event<T>
+        where <T as system::Trait>::AccountId,
+              <T as system::Trait>::Hash,
+              <T as balances::Trait>::Balance
+    {
         Created(AccountId, Hash),
+        PriceSet(AccountId, Hash, Balance),
     }
 );
 
@@ -103,6 +111,30 @@ decl_module! {
             <Nonce<T>>::mutate(|n| {
                 *n += 1
             });
+
+            Ok(())
+        }
+
+        // kittyのIDと新しいpriceを与えて、kittyのpriceを更新する関数を定義する。
+        fn set_price(origin, kitty_id: T::Hash, new_price: T::Balance) -> Result {
+
+            // Verify first, write lastの原則：create_kitty()を叩いたsenderの正当性を確認する。
+            let sender = ensure_signed(origin)?;
+
+            // Verify first, write lastの原則：指定したkittyが存在することを確認する。
+            ensure!(<Kitties<T>>::exists(kitty_id), "Error: this cat does not exist");
+
+            // Verify first, write lastの原則：本当にそのkittyはあなたのもの？
+            let owner = Self::owner_of(kitty_id).ok_or("Error: there is no owner for this kitty")?; // そもそも所有者のいないkittyだった。
+            ensure!(owner == sender, "Error: you do not have the ownership to this kitty"); // あなたのkittyではなかった。
+
+            // kittyをkitty IDで引き出して、priceを更新して、書き戻す。
+            let mut kitty = Self::kitty(kitty_id);
+            kitty.price = new_price;
+            <Kitties<T>>::insert(kitty_id, kitty);
+
+            // ブロックチェーンの状態が遷移したので、それを通知するイベントを吐く。
+            Self::deposit_event(RawEvent::PriceSet(sender, kitty_id, new_price));
 
             Ok(())
         }
