@@ -3,14 +3,6 @@ use system::ensure_signed;
 use support::{decl_storage, decl_module, StorageValue, StorageMap, dispatch::Result, ensure, decl_event};
 use runtime_primitives::traits::{As, Hash};
 
-#[derive(Encode, Decode, Default, Clone, PartialEq)]
-pub struct Kitty<Hash, Balance> {
-    id: Hash,
-    dna: Hash,
-    price: Balance,
-    gen: u64,
-}
-
 // Substrateでは「あるトランザクショううがFinalizeされたことが、直接そのトランザクションによって実行される
 // 関数が成功裏に終わったこと」を意味しない。Substrateでは「呼び出された関数が成功裏に終わったこと」を
 // Eventというものを明示的に返すことで表現する。Eventには任意の型を与えることができる。
@@ -29,8 +21,19 @@ pub struct Kitty<Hash, Balance> {
 // rustは型安全な演算が言語機能として提供されている。もしくはrustのResult型を使うことでも対応できる。
 // Verify first, write lastの原則：安全な操作であることを確認してから、ブロックに書き込む。
 
+// mapによるリストのエミュレートだと「アカウントとkittyが一対一対応」する必要があるので、複数のkittiesを一人が
+// 所有することができない。この問題はタプルを使うことで解決させることができる。
+
 pub trait Trait: balances::Trait {
     type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
+}
+
+#[derive(Encode, Decode, Default, Clone, PartialEq)]
+pub struct Kitty<Hash, Balance> {
+    id: Hash,
+    dna: Hash,
+    price: Balance,
+    gen: u64,
 }
 
 decl_event!(
