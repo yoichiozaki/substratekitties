@@ -27,6 +27,8 @@ use runtime_primitives::traits::{As, Hash};
 // 「データをブロックチェーンから引き出して、更新する」という操作はverify first, write lastの原則を
 // 適用することが求められる。
 
+// kittyの所有権の変更はSwap and Popメソッドで行う。
+
 pub trait Trait: balances::Trait {
     type Event: From<Event<Self>> + Into<<Self as system::Trait>::Event>;
 }
@@ -39,6 +41,7 @@ pub struct Kitty<Hash, Balance> {
     gen: u64,
 }
 
+// decl_eventマクロの適用によってブロックチェーンの状態遷移後に返されるイベントの型を定義する。
 decl_event!(
     pub enum Event<T>
         where <T as system::Trait>::AccountId,
@@ -47,6 +50,7 @@ decl_event!(
     {
         Created(AccountId, Hash),
         PriceSet(AccountId, Hash, Balance),
+        Transferred(AccountId, AccountId, Hash),
     }
 );
 
@@ -82,6 +86,7 @@ decl_module! {
         // 新しいKittyを生成し、その成否を返す関数を定義する。
         // Kittyたちはリストのような見た目のデータ構造でアカウントに紐づけられた形で管理される。
         fn create_kitty(origin) -> Result {
+
             // Verify first, write lastの原則：create_kitty()を叩いたsenderの正当性を確認する。
             let sender = ensure_signed(origin)?;
 
@@ -126,7 +131,7 @@ decl_module! {
 
             // Verify first, write lastの原則：本当にそのkittyはあなたのもの？
             let owner = Self::owner_of(kitty_id).ok_or("Error: there is no owner for this kitty")?; // そもそも所有者のいないkittyだった。
-            ensure!(owner == sender, "Error: you do not have the ownership to this kitty"); // あなたのkittyではなかった。
+            ensure!(owner == sender, "Error: you have no ownership to this kitty"); // あなたのkittyではなかった。
 
             // kittyをkitty IDで引き出して、priceを更新して、書き戻す。
             let mut kitty = Self::kitty(kitty_id);
@@ -138,6 +143,22 @@ decl_module! {
 
             Ok(())
         }
+
+        // 呼び出し側が転送先を指定してkittyを転送し、その成否を返す関数を定義する。
+        fn transfer(origin, to: T::AccountId, kitty_id: T::Hash) -> Result {
+
+            // Verify first, write lastの原則：正当なユーザーがこの関数を叩いたかを確認する。
+            let sender = ensure_signed(origin)?;
+
+            // Verify first, write lastの原則：転送したいkittyの存在を確認する。
+            let owner = Self::owner_of(kitty_id).ok_or("Error: there is no owner for this kitty")?;
+            ensure!(owner == sender, "Error: you have no ownership for this kitty");
+
+            // 転送をする。
+            Self::_transfer_from(sender, to, kitty_id)?;
+
+            Ok(())
+        }
     }
 }
 
@@ -146,7 +167,7 @@ impl <T: Trait> Module<T> {
     // 新たなkittyを記録するヘルパー関数を用意。
     fn _mint(to: T::AccountId, kitty_id: T::Hash, new_kitty: Kitty<T::Hash, T::Balance>) -> Result {
         // 計算したrandom_hashが衝突していないことを確認する。
-        ensure!(!<KittyOwner<T>>::exists(kitty_id), "the kitty coressponding to this ID already exit!");
+        ensure!(!<KittyOwner<T>>::exists(kitty_id), "Error: the kitty coressponding to this ID already exit!");
 
         // Verify first, write lastの原則：この人が現在何匹のkittyを所有しているかを取得する。
         let owned_kitty_count = Self::owned_kitty_count(&to);
@@ -192,6 +213,65 @@ impl <T: Trait> Module<T> {
 
         // トランザクション執行後のイベントを吐く。
         Self::deposit_event(RawEvent::Created(to, kitty_id));
+
+        Ok(())
+    }
+
+    // 転送元と転送先、転送されるkittyを特定するハッシュ値を引数に、転送を実行しその成否を返すヘルパー関数
+    fn _transfer_from(from: T::AccountId, to: T::AccountId, kitty_id: T::Hash) -> Result {
+
+        // Verify first, write lastの原則：呼び出し元が転送したいkittyの所有者であるかを確認する。
+        let owner = Self::owner_of(kitty_id).ok_or("Error: there is no owner for this kitty")?;
+        ensure!(owner == from, "Error: `from` account have no ownership for this kitty");
+
+        // 所有者の中の何番目のkittyを転送したいのかを確認する。
+        let owned_kitty_count_from = Self::owned_kitty_count(&from);
+
+        // 転送先では何番目のkittyとして扱われるのかを確認する。
+        let owned_kitty_count_to = Self::owned_kitty_count(&to);
+
+        // 転送先がすでにn匹のkittyを所有しているならば、転送先ではn+1匹目として扱われることを確認する。
+        let new_owned_kitty_count_to = owned_kitty_count_to.checked_add(1)
+            .ok_or("Error: happend overflow of `to`'s kitty balance while executing transfer method")?;
+
+        // 転送元がn匹のkittyを所有しているならば、転送してしまうと所有している個体数が1減ることを確認する。
+        let new_owned_kitty_count_from = owned_kitty_count_from.checked_sub(1)
+            .ok_or("Error: happend underflow of `from`'s kitty balance while executing transfer method")?;
+
+        // 転送されるkittyが転送前の所有者にとって何番目の個体なのかを確認する。
+        let kitty_index = <OwnedKittiesIndex<T>>::get(kitty_id);
+
+        // Swap and Popメソッドで転送を実施する。
+        // 転送したいkittyが転送前所有者の最直近に得た個体だったらPopすればいい。
+        // そうでないならば、転送されるkittyの位置に、最直近で得た個体へのポインタを貼る（Swap）。
+        if kitty_index != new_owned_kitty_count_from {
+
+            // 転送元が最直近に所有権を得たkittyのインデックスを確認する。
+            let last_kitty_id = <OwnedKittiesArray<T>>::get((from.clone(), new_owned_kitty_count_from));
+
+            <OwnedKittiesArray<T>>::insert((from.clone(), kitty_index), last_kitty_id);
+            <OwnedKittiesIndex<T>>::insert(last_kitty_id, kitty_index);
+        }
+
+        // 転送されたkittyの所有者を更新する。
+        <KittyOwner<T>>::insert(&kitty_id, &to);
+
+        // 転送されたkittyは所有者にとって何番目であるかが変更されたので更新する。
+        <OwnedKittiesIndex<T>>::insert(kitty_id, owned_kitty_count_to);
+
+        // 転送した側は転送して個体数が減ったので更新する。\
+        <OwnedKittiesArray<T>>::remove((from.clone(), new_owned_kitty_count_from));
+
+        // 転送された側は持っている個体数が増えたので更新する。
+        // `to`の`owned_kitty_count_to`匹目が`kitty_id`という意味である。
+        <OwnedKittiesArray<T>>::insert((to.clone(), owned_kitty_count_to), kitty_id);
+
+        //  双方の持っている個体数を更新する。
+        <OwnedKittiesCount<T>>::insert(&from, new_owned_kitty_count_from);
+        <OwnedKittiesCount<T>>::insert(&to, new_owned_kitty_count_to);
+
+        // Transferredイベントを吐く。
+        Self::deposit_event(RawEvent::Transferred(from, to, kitty_id));
 
         Ok(())
     }
