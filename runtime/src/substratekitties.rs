@@ -2,6 +2,7 @@ use parity_codec::Encode;
 use system::ensure_signed;
 use support::{decl_storage, decl_module, StorageValue, StorageMap, dispatch::Result, ensure, decl_event};
 use runtime_primitives::traits::{As, Hash, Zero};
+use rstd::cmp;
 
 // Substrateでは「あるトランザクションがFinalizeされたことが、直接そのトランザクションによって実行される
 // 関数が成功裏に終わったこと」を意味しない。Substrateでは「呼び出された関数が成功裏に終わったこと」を
@@ -35,10 +36,10 @@ pub trait Trait: balances::Trait {
 
 #[derive(Encode, Decode, Default, Clone, PartialEq)]
 pub struct Kitty<Hash, Balance> {
-    id: Hash,
-    dna: Hash,
-    price: Balance,
-    gen: u64,
+    id: Hash,       // idでkittyを唯一に識別する。
+    dna: Hash,      // 個体に固有の値なのでdnaとして機能する。
+    price: Balance, // 価格
+    gen: u64,       // 性別。gender。
 }
 
 // decl_eventマクロの適用によってブロックチェーンの状態遷移後に返されるイベントの型を定義する。
@@ -199,6 +200,53 @@ decl_module! {
             Self::deposit_event(RawEvent::Bought(sender, owner, kitty_id, kitty_price));
 
             Ok(())
+        }
+
+        // 親となる二匹を引数として与えて、子供を作らせ、その成否を返す関数。
+        fn breed_kitty(origin, kitty_id_1: T::Hash, kitty_id_2: T::Hash) -> Result {
+
+            // Verify first, write lastの原則：正当なユーザーがこの関数を叩いたかを確認する。
+            let sender = ensure_signed(origin)?;
+
+            // Verify first, write lastの原則：kittyの存在確認。
+            ensure!(<Kitties<T>>::exists(kitty_id_1), "Error: this cat 1 does not exist");
+            ensure!(<Kitties<T>>::exists(kitty_id_2), "Error: this cat 2 does not exist");
+
+            // 子供に振られるidを計算する。
+            let nonce = <Nonce<T>>::get();
+            let random_hash = (<system::Module<T>>::random_seed(), &sender, nonce)
+                                .using_encoded(<T as system::Trait>::Hashing::hash);
+
+            // 親を引き出す。
+            let kitty_1 = Self::kitty(kitty_id_1);
+            let kitty_2 = Self::kitty(kitty_id_2);
+
+            // 最終的な子供のDNA（初期値として片親のDNAをコピー）
+            let mut final_dna = kitty_1.dna;
+
+            // DNAをシェイキング！
+            for (i, (dna_2_element, r)) in kitty_2.dna.as_ref().iter().zip(random_hash.as_ref().iter()).enumerate() {
+                if r % 2 == 0 {
+                    final_dna.as_mut()[i] = *dna_2_element;
+                }
+            }
+
+            // 子供誕生
+            let new_kitty = Kitty {
+                id: random_hash,
+                dna: final_dna,
+                price: <T::Balance as As<u64>>::sa(0),
+                gen: cmp::max(kitty_1.gen, kitty_2.gen) + 1,
+            };
+
+            // 子供の所有権を記録する。
+            Self::_mint(sender, random_hash, new_kitty)?;
+
+            // nonce更新
+            <Nonce<T>>::mutate(|n| *n += 1);
+
+            Ok(())
+
         }
     }
 }
