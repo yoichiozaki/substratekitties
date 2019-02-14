@@ -77,20 +77,6 @@ decl_module! {
             // Verify first, write lastの原則：create_kitty()を叩いたsenderの正当性を確認する。
             let sender = ensure_signed(origin)?;
 
-            // Verify first, write lastの原則：この人が現在何匹のkittyを所有しているかを取得する。
-            let owned_kitty_count = Self::owned_kitty_count(&sender);
-
-            // Verify first, write lastの原則：新しいkittyを所有するので更新する。
-            let new_owned_kitty_count = owned_kitty_count.checked_add(1)
-                                            .ok_or("Error: Overflow happed when trying to register a new kitty in your account balance")?;
-
-            // Verify first, write lastの原則：現在登録されているkittiesの個体数を確認する。
-            let all_kitties_count = Self::all_kitties_count();
-
-            // Verify first, write lastの原則：これから登録しようとしているkittyを追加してoverflowしないかを確認する。
-            let new_all_kitties_count = all_kitties_count.checked_add(1)
-                                            .ok_or("Error: Overflow happened when trying to register a new kitty")?;
-
             // nonceを計算する。
             let nonce = <Nonce<T>>::get();
 
@@ -110,43 +96,71 @@ decl_module! {
                 gen: 0,
             };
 
-            // (random_hash, new_kitty)を登録する。
-            <Kitties<T>>::insert(random_hash, new_kitty);
-
-            // (生成者を一意に区別するハッシュ値, 生成者)を登録する。
-            <KittyOwner<T>>::insert(random_hash, &sender);
-
-            // (all_kitties_count, random_hash)を登録する。all_kitties_countは0オリジンの通し番号となる。
-            <AllKittiesArray<T>>::insert(all_kitties_count, random_hash);
-
-            // 「現在のkittiesの個体数」を更新する。
-            <AllKittiesCount<T>>::put(new_all_kitties_count);
-
-            // (random_hash, all_kitties_count)を登録する。
-            <AllKittiesIndex<T>>::insert(random_hash, all_kitties_count);
-
-            // // (生成者, 生成者を一意に区別するハッシュ値)を登録する。
-            // <OwnedKitty<T>>::insert(&sender, random_hash);
-
-            // ((ユーザー, その人にとって何匹目か), kittyの識別子)を記録する。
-            // こうすることで、二次元リストをエミュレートする。「誰の」「何番目か」で一匹を指定できる。
-            <OwnedKittiesArray<T>>::insert((sender.clone(), owned_kitty_count), random_hash);
-
-            // (ユーザー, ユーザーの所有しているkittyの個体数)を登録する。
-            <OwnedKittiesCount<T>>::insert(&sender, new_owned_kitty_count);
-
-            // 今生成されたkittyが、その所有者にとって何番目のkittyなのかを登録する。
-            <OwnedKittiesIndex<T>>::insert(random_hash, owned_kitty_count);
+            // 新たに生成されたkittyを記録する。
+            Self::_mint(sender, random_hash, new_kitty)?;
 
             // Nonceをインクリメント
             <Nonce<T>>::mutate(|n| {
                 *n += 1
             });
 
-            // トランザクション執行後のイベントを吐く。
-            Self::deposit_event(RawEvent::Created(sender, random_hash));
-
             Ok(())
         }
+    }
+}
+
+impl <T: Trait> Module<T> {
+
+    // 新たなkittyを記録するヘルパー関数を用意。
+    fn _mint(to: T::AccountId, kitty_id: T::Hash, new_kitty: Kitty<T::Hash, T::Balance>) -> Result {
+        // 計算したrandom_hashが衝突していないことを確認する。
+        ensure!(!<KittyOwner<T>>::exists(kitty_id), "the kitty coressponding to this ID already exit!");
+
+        // Verify first, write lastの原則：この人が現在何匹のkittyを所有しているかを取得する。
+        let owned_kitty_count = Self::owned_kitty_count(&to);
+
+        // Verify first, write lastの原則：新しいkittyを所有するので更新する。
+        let new_owned_kitty_count = owned_kitty_count.checked_add(1)
+            .ok_or("Error: Overflow happed when trying to register a new kitty in your account balance")?;
+
+        // Verify first, write lastの原則：現在登録されているkittiesの個体数を確認する。
+        let all_kitties_count = Self::all_kitties_count();
+
+        // Verify first, write lastの原則：これから登録しようとしているkittyを追加してoverflowしないかを確認する。
+        let new_all_kitties_count = all_kitties_count.checked_add(1)
+            .ok_or("Error: Overflow happened when trying to register a new kitty")?;
+
+        // (random_hash, new_kitty)を登録する。
+        <Kitties<T>>::insert(kitty_id, new_kitty);
+
+        // (生成者を一意に区別するハッシュ値, 生成者)を登録する。
+        <KittyOwner<T>>::insert(kitty_id, &to);
+
+        // (all_kitties_count, random_hash)を登録する。all_kitties_countは0オリジンの通し番号となる。
+        <AllKittiesArray<T>>::insert(all_kitties_count, kitty_id);
+
+        // 「現在のkittiesの個体数」を更新する。
+        <AllKittiesCount<T>>::put(new_all_kitties_count);
+
+        // (random_hash, all_kitties_count)を登録する。
+        <AllKittiesIndex<T>>::insert(kitty_id, all_kitties_count);
+
+        // // (生成者, 生成者を一意に区別するハッシュ値)を登録する。
+        // <OwnedKitty<T>>::insert(&sender, random_hash);
+
+        // ((ユーザー, その人にとって何匹目か), kittyの識別子)を記録する。
+        // こうすることで、二次元リストをエミュレートする。「誰の」「何番目か」で一匹を指定できる。
+        <OwnedKittiesArray<T>>::insert((to.clone(), owned_kitty_count), kitty_id);
+
+        // (ユーザー, ユーザーの所有しているkittyの個体数)を登録する。
+        <OwnedKittiesCount<T>>::insert(&to, new_owned_kitty_count);
+
+        // 今生成されたkittyが、その所有者にとって何番目のkittyなのかを登録する。
+        <OwnedKittiesIndex<T>>::insert(kitty_id, owned_kitty_count);
+
+        // トランザクション執行後のイベントを吐く。
+        Self::deposit_event(RawEvent::Created(to, kitty_id));
+
+        Ok(())
     }
 }
